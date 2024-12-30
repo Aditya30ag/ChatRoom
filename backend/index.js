@@ -54,7 +54,7 @@ io.on("connection", (socket) => {
     socket.broadcast.emit("userTyping", { user: username, isTyping });
   });
 
-  socket.on("leave", () => {
+  socket.on("dis", () => {
     const username = users.get(socket.id);
     if (username) {
       // Remove user and broadcast their departure

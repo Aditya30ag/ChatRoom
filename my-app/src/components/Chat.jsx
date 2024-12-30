@@ -3,8 +3,6 @@ import { io } from 'socket.io-client';
 import { format } from 'date-fns';
 import { Users, Send, LogOut } from 'lucide-react';
 
-const socket = io('http://localhost:3000');
-
 function Chat() {
   const [username, setUsername] = useState('');
   const [message, setMessage] = useState('');
@@ -13,31 +11,62 @@ function Chat() {
   const [typingUsers, setTypingUsers] = useState(new Set());
   const [activeUsers, setActiveUsers] = useState([]);
   const [showUsersList, setShowUsersList] = useState(false);
+  const [isConnected, setIsConnected] = useState(false);
+  const [reconnecting, setReconnecting] = useState(false);
+  const socketRef = useRef(null);
   const messagesEndRef = useRef(null);
+  const typingTimeoutRef = useRef(null);
 
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  };
-
+  // Initialize socket connection
   useEffect(() => {
-    socket.on('message', (msg) => {
-      setMessages((prev) => [...prev, { ...msg, type: 'message' }]);
+    socketRef.current = io('http://localhost:3000', {
+      reconnection: true,
+      reconnectionAttempts: 5,
+      reconnectionDelay: 1000,
+      autoConnect: false // Don't connect automatically
     });
 
-    socket.on('userJoined', (msg) => {
-      setMessages((prev) => [...prev, { ...msg, type: 'system' }]);
+    // Connection event handlers
+    socketRef.current.on('connect', () => {
+      setIsConnected(true);
+      setReconnecting(false);
+      if (isJoined && username) {
+        socketRef.current.emit('join', username); // Rejoin on reconnect
+      }
     });
 
-    socket.on('userLeft', (msg) => {
-      setMessages((prev) => [...prev, { ...msg, type: 'system' }]);
+    socketRef.current.on('disconnect', () => {
+      setIsConnected(false);
     });
 
-    socket.on('activeUsers', (users) => {
+    socketRef.current.on('reconnecting', () => {
+      setReconnecting(true);
+    });
+
+    socketRef.current.on('reconnect_failed', () => {
+      setReconnecting(false);
+      alert('Failed to connect to chat server. Please try again later.');
+    });
+
+    // Message and user event handlers
+    socketRef.current.on('message', (msg) => {
+      setMessages(prev => [...prev, { ...msg, type: 'message' }]);
+    });
+
+    socketRef.current.on('userJoined', (msg) => {
+      setMessages(prev => [...prev, { ...msg, type: 'system' }]);
+    });
+
+    socketRef.current.on('userLeft', (msg) => {
+      setMessages(prev => [...prev, { ...msg, type: 'system' }]);
+    });
+
+    socketRef.current.on('activeUsers', (users) => {
       setActiveUsers(users);
     });
 
-    socket.on('userTyping', ({ user, isTyping }) => {
-      setTypingUsers((prev) => {
+    socketRef.current.on('userTyping', ({ user, isTyping }) => {
+      setTypingUsers(prev => {
         const newSet = new Set(prev);
         if (isTyping) {
           newSet.add(user);
@@ -49,50 +78,78 @@ function Chat() {
     });
 
     return () => {
-      socket.off('message');
-      socket.off('userJoined');
-      socket.off('userLeft');
-      socket.off('userTyping');
-      socket.off('activeUsers');
+      if (socketRef.current) {
+        socketRef.current.disconnect();
+      }
     };
   }, []);
 
+  // Auto-scroll to bottom when new messages arrive
   useEffect(() => {
     scrollToBottom();
   }, [messages]);
 
-  const handleJoin = (e) => {
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  };
+
+  // Debounced typing indicator
+  const handleTyping = (e) => {
+    setMessage(e.target.value);
+    
+    if (typingTimeoutRef.current) {
+      clearTimeout(typingTimeoutRef.current);
+    }
+
+    socketRef.current?.emit('typing', true);
+    
+    typingTimeoutRef.current = setTimeout(() => {
+      socketRef.current?.emit('typing', false);
+    }, 1000);
+  };
+
+  const handleJoin = async (e) => {
     e.preventDefault();
-    if (username.trim()) {
-      socket.emit('join', username);
+    if (!username.trim()) return;
+
+    try {
+      socketRef.current.connect();
+      socketRef.current.emit('join', username);
       setIsJoined(true);
+    } catch (error) {
+      alert('Failed to join chat. Please try again.');
     }
   };
 
   const handleSendMessage = (e) => {
     e.preventDefault();
-    if (message.trim()) {
-      socket.emit('message', message);
-      setMessage('');
-      socket.emit('typing', false);
+    if (!message.trim() || !socketRef.current?.connected) return;
+
+    socketRef.current.emit('message', message);
+    setMessage('');
+    
+    if (typingTimeoutRef.current) {
+      clearTimeout(typingTimeoutRef.current);
+      socketRef.current.emit('typing', false);
     }
   };
 
-  const handleTyping = (e) => {
-    setMessage(e.target.value);
-    socket.emit('typing', e.target.value.length > 0);
-  };
-
   const handleLeave = () => {
-    socket.emit('leave');
+    if (socketRef.current?.connected) {
+      socketRef.current.emit('dis');
+      socketRef.current.disconnect();
+    }
     setIsJoined(false);
     setMessages([]);
     setUsername('');
+    setTypingUsers(new Set());
+    setActiveUsers([]);
+    setIsConnected(false);
   };
 
   if (!isJoined) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-gray-900 to-gray-800 flex items-center justify-center p-4">
+      <div className="min-h-screen w-full bg-gradient-to-br from-gray-900 to-gray-800 flex items-center justify-center p-4">
         <div className="bg-gray-800 text-gray-200 rounded-xl shadow-lg w-full max-w-md p-8">
           <h2 className="text-3xl font-bold mb-6 text-center">Welcome to Chat</h2>
           <form onSubmit={handleJoin} className="space-y-6">
@@ -101,17 +158,20 @@ function Chat() {
               <input
                 type="text"
                 value={username}
-                onChange={(e) => setUsername(e.target.value)}
+                onChange={(e) => setUsername(e.target.value.trim())}
                 placeholder="Enter your username"
                 className="w-full px-4 py-3 border border-gray-700 bg-gray-900 rounded-lg text-gray-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
                 required
+                minLength={2}
+                maxLength={20}
               />
             </div>
             <button
               type="submit"
-              className="w-full bg-blue-600 text-white py-3 px-4 rounded-lg hover:bg-blue-700 transition-colors font-medium focus:outline-none focus:ring-2 focus:ring-blue-500"
+              disabled={!username.trim() || reconnecting}
+              className="w-full bg-blue-600 text-white py-3 px-4 rounded-lg hover:bg-blue-700 transition-colors font-medium focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              Join Chat
+              {reconnecting ? 'Connecting...' : 'Join Chat'}
             </button>
           </form>
         </div>
@@ -120,13 +180,18 @@ function Chat() {
   }
 
   return (
-    <div className="max-w-6xl mx-auto p-4 h-screen flex flex-col bg-gray-900 text-gray-200">
+    <div className="w-full mx-auto p-4 h-screen flex flex-col bg-gray-900 text-gray-200">
       <div className="rounded-xl shadow-lg flex-1 flex flex-col overflow-hidden">
-        {/* Header */}
+        {/* Header with connection status */}
         <div className="bg-gradient-to-r from-blue-600 to-blue-700 text-white p-4 flex items-center justify-between">
           <div>
             <h1 className="text-xl font-semibold">Chat Room</h1>
-            <p className="text-sm opacity-90">Welcome, {username}!</p>
+            <div className="flex items-center gap-2">
+              <div className={`w-2 h-2 rounded-full ${isConnected ? 'bg-green-400' : 'bg-red-400'}`} />
+              <p className="text-sm opacity-90">
+                {isConnected ? `Connected as ${username}` : 'Disconnected'}
+              </p>
+            </div>
           </div>
           <div className="flex items-center gap-4">
             <button
@@ -177,7 +242,7 @@ function Chat() {
                         {msg.user !== username && (
                           <p className="text-sm font-semibold mb-1">{msg.user}</p>
                         )}
-                        <p className="leading-relaxed">{msg.text}</p>
+                        <p className="leading-relaxed break-words">{msg.text}</p>
                         <p className="text-xs mt-2 opacity-75">
                           {format(new Date(msg.timestamp), 'HH:mm')}
                         </p>
@@ -192,7 +257,7 @@ function Chat() {
             {/* Typing Indicator */}
             {typingUsers.size > 0 && (
               <div className="px-4 py-2 text-sm text-gray-400 bg-gray-800 border-t border-gray-700">
-                {Array.from(typingUsers).join(', ')} is typing...
+                {Array.from(typingUsers).join(', ')} {typingUsers.size === 1 ? 'is' : 'are'} typing...
               </div>
             )}
 
@@ -203,12 +268,14 @@ function Chat() {
                   type="text"
                   value={message}
                   onChange={handleTyping}
-                  placeholder="Type a message..."
-                  className="flex-1 px-4 py-3 border border-gray-700 bg-gray-900 rounded-lg text-gray-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  placeholder={isConnected ? "Type a message..." : "Reconnecting..."}
+                  disabled={!isConnected}
+                  className="flex-1 px-4 py-3 border border-gray-700 bg-gray-900 rounded-lg text-gray-200 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
                 />
                 <button
                   type="submit"
-                  className="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 flex items-center gap-2"
+                  disabled={!isConnected || !message.trim()}
+                  className="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   <Send size={18} />
                   <span>Send</span>
