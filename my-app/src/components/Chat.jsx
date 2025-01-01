@@ -3,7 +3,7 @@ import { io } from 'socket.io-client';
 import { format } from 'date-fns';
 import { Users, Send, LogOut } from 'lucide-react';
 
-function Chat() {
+function RoomChat() {
   const [username, setUsername] = useState('');
   const [message, setMessage] = useState('');
   const [messages, setMessages] = useState([]);
@@ -314,4 +314,4 @@ function Chat() {
   );
 }
 
-export default Chat;
+export default RoomChat;

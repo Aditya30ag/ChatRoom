@@ -1,10 +1,10 @@
 import './App.css';
-import Chat from './components/Chat';
+import RoomChat from './components/RoomChat';
+// import Chat from './components/Chat';
 
 function App() {
   return (
-    
-    <Chat/>
+    <RoomChat />
   );
 }
 

@@ -1,4 +1,6 @@
 /backend/node_modules/
 /my-app/node_modules/
+/backendsql/node_modules/
+/backendroom/node_modules/
 /dist/
 /.env
